@@ -1,0 +1,683 @@
+<html>
+<head>
+<title>Cellular Automata</title>
+<style>
+div{font-family:monospace;font-size:14px;display:inline-block;}
+input{font-family:monospace;font-size:14px;display:inline-block;margin-top:6px;}
+input:active{font-weight:bold;background-color:green;}
+td{font-family:monospace;font-size:14px;}
+body{margin:0px;font-family:monospace;font-size:14px;}
+</style>
+</head>
+
+<body>
+
+
+<table style="padding:10px;padding-top:6px;"><tr><td valign="top">
+
+<div id="ruleSaved" style="display:none;color:white;background:black;">Rule Saved</div>
+<div id="stats" style="display:none;"></div>
+<input id="startStop" type="button" value="Start" onmousedown="running=!running;">
+<input type="button" value="Step Once" onmousedown="if(!running){cycleCA();showCA();}">
+<input id="autoR" type="button" value="AutoRestart: Off" onmousedown="autoRestart=!autoRestart;if(autoRestart){el('autoR').value='AutoRestart: On';}else{el('autoR').value='AutoRestart: Off';}">
+<BR>
+
+
+<select id="selectRule" onchange="ruleLoader(parseInt(this.options[this.selectedIndex].value));">
+<option id="opTitle">Load Saved Rule</option>
+</select>
+<BR>
+<input type="button" value="Set Colors" onmousedown="setColors();if(!running){showCA();}"><BR>
+<div id="stateSquares" style="margin-right:20px;padding:0px;">
+<div id="ss0" style="margin:0px;width:20px;height:20px;border:solid 1px black;background-color:black;display:inline-block;color:white;"></div></div>
+<BR>
+
+<input type="button" value="Save Image" onmousedown="imageSaver();">
+<input type="button" value="Random Rule" onmousedown="randomCells();randomRule();if(!running){cycleCA();showCA();}">
+<BR>
+
+<input type="button" value="Random States" onmousedown="randomCells();if(!running){showCA();}">
+<input type="button" value="Save Rule" onmousedown="saveRuleValues(numSavedRules+1);setTimeout('updateSelectRule();',300);">
+
+<BR>
+<input type="button" value="View Large" onmousedown="cellSize=6;largeView=true;updateInputs(1);showCA();">
+<input type="button" value="View Small" onmousedown="cellSize=1;largeView=false;updateInputs(1);showCA();">
+
+
+
+
+<BR>
+
+<input id="densityInput" type="text" size="2" value="" onchange="density=this.value;">:Initial Live Cell Density
+<BR>
+<input id="millisInput" type="text" size="4" value="" onchange="millisPerFrame=this.value;">:Milliseconds Per Frame
+<BR>
+<div id="activeCounter"></div> 
+
+</td><td valign="top">
+
+<canvas id="caCanvas" style="margin:0px;" onmousedown="if(event.which==1){running=!running;}else if(event.which==2){setColors();if(!running){cycleCA();showCA();}}"></canvas>
+
+<BR><BR>
+<input id="numStates" type="text" value="" size="3" onchange="this.value=numStates=keepRange(2,17,this.value);">:numStates<BR>
+<input id="bMatches" type="text" value="" size="3" onchange="bMatches=this.value">:bMatches<BR>
+<input id="dMatches" type="text" value="" size="3" onchange="dMatches=this.value">:dMatches<BR>
+<input id="birthNeighsMax" type="text" value="" size="3" onchange="birthNeighsMax=this.value">:birthNeighsMax<BR>
+<input id="deathNeighsMax" type="text" value="" size="3" onchange="deathNeighsMax=this.value">:deathNeighsMax<BR>
+<BR><BR>
+
+
+</td></tr></table>
+<BR>
+<div id="ruleValues" style="padding-left:10px;"></div>
+<BR><BR>
+<script>
+ "use strict";
+
+function el(a){return document.getElementById(a);}
+function da(a,b){if(el(a)){el(a).innerHTML=b;}}
+//get random integer between min and max inclusive
+function rander(min, max){
+return Math.floor(Math.random() * (max - min + 1)) + min;
+}//end rander
+ 
+//pixel setting function
+function setPixel(imageData, x, y, r, g, b, a){
+var index;
+index=(x + y * imageData.width) * 4;
+imageData.data[index+0]=r;
+imageData.data[index+1]=g;
+imageData.data[index+2]=b;
+imageData.data[index+3]=a;
+}//end setPixel
+
+var caCanvas;
+var caContext;
+var width=200; //also change in canvas tag in cell.htm
+var height=200;
+var caimageData;
+var cellState;
+var tempCellState; //so can calculate all neighbors before changing states of cells
+var birth=[];//per state, number of neighbors of each state required to be born
+var death=[];//per state, number of neighbors of each state required to die
+var newState=[];
+var neighCount=[];
+var birthNeighsMax=16;//max of random neighbor count values assigned to birth rule
+var deathNeighsMax=8;//max of random neighbor count values assigned to death rule
+var bMatches=2; //number of rule matches required for cell to be born
+var dMatches=5; //number of rule matches required for cell to die
+var numStates=17;
+var stateColors=[];
+var density=1;
+var running=true;
+var millisPerFrame=100;
+var cellSize=1;
+var largeView=false;
+var numSavedRules=0;
+var stepCount=0;
+var totalLiving=0;
+var totalDead=0;
+var ratioLivingDead=0;
+var autoRestart=false;
+var activeStates=[];
+var dater=new Date();
+var ruleFilenames=[];
+
+//setup initial arrays etc for CA
+function initCA(){
+updateInputs(1);
+
+//initialize 2d arrays
+cellState=[]; //current generation
+tempCellState=[]; //temp next generation
+for(var y=0;y<height;y++){ cellState[y]=[]; tempCellState[y]=[];
+for(var x=0;x<width;x++){
+cellState[y][x]=0;
+tempCellState[y][x]=0;
+}//end x loop
+}//end y loop
+
+//initialize survival, birth, newstate arrays
+for(var n=0;n<numStates;n++){ 
+birth[n]=[];
+death[n]=[];
+newState[n]=[]; 
+for(var i=0;i<numStates;i++){
+birth[n][i]=rander(1,birthNeighsMax);
+death[n][i]=rander(0,deathNeighsMax);
+newState[n][i]=rander(1,numStates-1);
+}//end i loop
+}//end n loop
+
+//set color for each state
+setColors();
+}//end initCA
+
+
+//set color for each state
+function setColors(){
+for(var i=1;i<numStates;i++){
+//stateColors[i]=randomColor({luminosity:'bright'});
+randomColorBright();
+//stateColors[i]='#'+Math.floor(Math.random()*16777215).toString(16);
+}
+divStates();
+}//end setColors
+
+
+//fill all cells with random state values
+function randomCells(){
+stepCount=0;
+for(var y=0; y<height; y++){
+for(var x=0; x<width; x++){ 
+if(rander(0,density)==density){
+cellState[x][y]=rander(0,numStates-1); 
+}else{cellState[x][y]=0;}
+}//end x loop
+}//end y loop
+}//end randomCells
+
+
+//set values for random rules
+function randomRule(){
+
+for(var i=0;i<numStates;i++){
+for(var n=0;n<numStates;n++){
+
+//birth count: number of neighbors of a particular state required for cell to be born into newState; min value must be 1, or else get siezure inducing flashing; max value must be higher than 8, or else cells grow too fast; if max is too high, cells do not live long enough for forms to emerge;
+birth[i][n]=rander(1,birthNeighsMax);
+
+//death count: number of neighbors of a particular state required for a cell to change to state 0 (die); min value must be 0
+death[i][n]=rander(0,deathNeighsMax);
+
+//new state is one of 16 values between 1 and 16 inclusive
+newState[i][n]=rander(1,numStates-1); 
+
+}//end n loop
+}//end i loop
+
+saveRuleValues(0);
+el('selectRule').value='Load Saved Rule';
+}//end randomRule
+
+
+//main processor loop
+function cycleCA(){
+var x,y, xp,yp;
+
+//count neighbors of each state for each cell, and apply rules
+for(y=0; y<height; y++){
+for(x=0; x<width; x++){
+
+//reset neighbor counts to 0 for this cell
+for(var i=0;i<numStates;i++){neighCount[i]=0;
+activeStates[i]=0; //for knowing which states are active
+}
+
+//N
+xp=x;
+yp=y-1;
+if(yp<0){ yp=yp+height; }
+neighCount[cellState[xp][yp]]++;
+
+//NW
+xp=x-1;
+yp=y-1;
+if(xp<0){ xp=xp+width; }
+if(yp<0){ yp=yp+height; }
+neighCount[cellState[xp][yp]]++; 
+
+//NE
+xp=x+1;
+yp=y-1;
+if(xp==width){ xp=0; }
+if(yp<0){ yp=yp+height; }
+neighCount[cellState[xp][yp]]++; 
+
+//W
+xp=x-1;
+yp=y;
+if(xp<0){ xp=xp+width; }
+neighCount[cellState[xp][yp]]++; 
+
+//E
+xp=x+1;
+yp=y;
+if(xp==width){ xp=0; }
+neighCount[cellState[xp][yp]]++; 
+
+//S
+xp=x;
+yp=y+1;
+if(yp==height){ yp=0; }
+neighCount[cellState[xp][yp]]++; 
+
+//SW
+xp=x-1;
+yp=y+1;
+if(xp<0){ xp=xp+width; }
+if(yp==height){ yp=0; }
+neighCount[cellState[xp][yp]]++; 
+
+//SE
+xp=x+1;
+yp=y+1;
+if(xp==width){ xp=0; }
+if(yp==height){ yp=0; }
+neighCount[cellState[xp][yp]]++;
+
+
+//apply rules based on neighbor state counts
+birthDeathCheck: { //label for breaking out of check loops when enough matches found
+
+//birth
+if(cellState[x][y]==0){
+var bCount=0;
+for(var i=1;i<numStates;i++){
+for(var n=1;n<numStates;n++){ 
+if(neighCount[i]==birth[i][n]){
+bCount++;
+if(bCount>=bMatches){ tempCellState[x][y]=newState[i][n]; break birthDeathCheck; }
+
+}//end neighCount==birth
+}//end n loop
+}//end i loop
+}//end cellState==0
+
+//death
+if(cellState[x][y]>0){ //tempCellState[x][y]=0;} //go directly to death
+
+var dCount=0;
+for(var i=1;i<numStates;i++){
+for(var n=1;n<numStates;n++){ 
+if(neighCount[i]>=death[i][n]){
+dCount++;
+if(dCount>=dMatches){ tempCellState[x][y]=0; break birthDeathCheck; } 
+
+}//end neighCount>=death
+}//end n loop
+}//end i loop
+}//end cellState>0
+
+
+}//end birthDeathCheck
+
+
+}//end x loop
+}//end y loop
+
+//copy temp array back to main array, and get data for autoRestart
+totalLiving=0, totalDead=0;
+for(y=0; y<height; y++){
+for(x=0; x<width; x++){
+cellState[x][y]=tempCellState[x][y];
+if(cellState[x][y]==0){totalDead++;}else{totalLiving++;}
+//for knowing which states are active
+if(tempCellState[x][y]>0){activeStates[tempCellState[x][y]]=1;}
+}//end y
+}//end x
+
+
+//for counting steps and getting density (ratio of living to dead)
+stepCount++; 
+ratioLivingDead=parseFloat((totalDead+1)/(totalLiving+1)).toFixed(0);
+da('stats', 'Steps: '+ stepCount+' -- '+ratioLivingDead +' :Density');
+
+
+//auto restart, for searching without watching
+if(autoRestart){
+el('stats').style.display="block";
+
+if(stepCount>10&&stepCount<=30&&(ratioLivingDead<3||ratioLivingDead>145)){//restart
+randomCells();randomRule();
+
+}else if(stepCount>30&&stepCount<=100&&(ratioLivingDead<5||ratioLivingDead>300)){//restart
+randomCells();randomRule();
+
+}else if(stepCount>100){
+
+if(ratioLivingDead<9||ratioLivingDead>300){//restart
+randomCells();randomRule();
+
+}else{ //save rule
+saveRuleValues(numSavedRules+1);
+setTimeout('updateSelectRule();',300);
+el('ruleSaved').style.display='inline-block';
+setTimeout("el('ruleSaved').style.display='none';",3000);
+randomCells();randomRule();
+}//end save rule
+
+}//end if stepCount>120
+
+}else{el('stats').style.display="none";}//end if autoRestart
+
+divStates();//show active states in colored squares
+}//end cycleCa
+
+
+
+//render function
+function showCA(){
+caCanvas=el('caCanvas');
+caContext=caCanvas.getContext('2d');
+caimageData=caContext.createImageData( width, height);
+
+if(largeView){showCaLarge();}else{
+
+var x,y, red,green,blue,xc,yc;
+for(y=0,yc=0; y<height; y++,yc+=cellSize){
+for(x=0,xc=0; x<width; x++,xc+=cellSize){
+
+if(cellState[x][y]==0){ //paint dead
+setPixel(caimageData, x,y, 0,0,0,255);
+
+}else{ //paint living
+setPixel(caimageData,x,y, 
+stateColors[cellState[x][y]][0],
+stateColors[cellState[x][y]][1],
+stateColors[cellState[x][y]][2],
+255);
+}
+}//end x loop
+}//end y loop
+
+// copy the image data back onto the canvas
+caContext.clearRect(0, 0, width, height);
+caContext.putImageData(caimageData,0,0); // at coords 0,0
+}//end if !largeView
+}//end showCA
+
+
+//render large with grid function
+function showCaLarge(){
+if(cellSize<2){cellSize=2;}
+caContext.clearRect(0, 0, width*cellSize, height*cellSize);
+
+var x,y, red,green,blue,xc,yc;
+for(y=0,yc=0; y<height; y++,yc+=cellSize){
+for(x=0,xc=0; x<width; x++,xc+=cellSize){
+
+if(cellState[x][y]==0){ //paint dead
+caContext.fillStyle = "#000000";
+caContext.fillRect(xc, yc, cellSize, cellSize);
+
+}else{ //paint living
+caContext.fillStyle = 
+rgbToHex(
+stateColors[cellState[x][y]][0],
+stateColors[cellState[x][y]][1],
+stateColors[cellState[x][y]][2]
+);
+caContext.fillRect(xc, yc, cellSize, cellSize);
+}
+}//end x loop
+}//end y loop
+
+drawGrid();
+}//end showCaLarge
+
+
+//draw grid
+function drawGrid(){
+//vertical lines
+caContext.beginPath();
+for(var xc=0; xc<width*cellSize; xc+=cellSize){
+caContext.moveTo(xc,0);
+caContext.lineTo(xc,height*cellSize);
+
+caContext.moveTo(0,xc);
+caContext.lineTo(width*cellSize,xc);
+}//end xc loop
+caContext.strokeStyle="#000000";
+caContext.stroke();
+}//end drawGrid
+
+
+//run 
+function ticker(){  
+setTimeout("ticker();", millisPerFrame); //milliseconds between renders: / 1000 = max fps
+
+if(running){ 
+el('startStop').value='Stop';
+showCA();
+cycleCA();
+}//end if running
+else{
+el('startStop').value='Start';
+}
+
+}//end ticker
+
+
+
+//set random colors
+function randomColorBright(){
+var c=[];
+for(var i=0;i<numStates;i++){
+c[i]=[];
+c[i][0] = rander(0,255);  // red
+c[i][1] = rander(0,255);  // green
+c[i][2] = rander(0,255);  // blue
+
+// find max and min indexes.
+var max, min;
+
+if(c[i][0] > c[i][1]){
+max = (c[i][0] > c[i][2]) ? 0 : 2;
+min = (c[i][1] < c[i][2]) ? 1 : 2;
+
+}else{
+
+max=(c[i][1] > c[i][2]) ? 1 : 2;
+var notmax = 1 + max % 2;
+min = (c[i][0] < c[i][notmax]) ? 0 : notmax;
+}
+c[i][max]=255;
+c[i][min]=0;
+stateColors[i]=[ c[i][0], c[i][1], c[i][2] ];
+}//end numstates loop
+}//end random color function
+
+
+function componentToHex(c){
+var hex = c.toString(16);
+return hex.length == 1 ? "0" + hex : hex;
+}
+
+function rgbToHex(r, g, b){
+return "#" + componentToHex(r) + componentToHex(g) + componentToHex(b);
+}
+</script>
+<iframe id="ifr" src="ruleWriter.php" width="100%" style="display:none">hidden</iframe>
+<iframe id="ifr3" src="filenameReader.php" width="100%" style="display:none">hidden</iframe>
+<script>
+window.onload=function(){ getRuleFilenames(); initCA(); divStates(); randomCells(); randomRule(); showCA(); ticker(); saveRuleValues(0); initSelectRule(); cycleCA();  }
+
+//init select rule drop down
+function initSelectRule(){
+numSavedRules=ruleFilenames.length;
+for(var i=0;i<numSavedRules;i++){
+var op=document.createElement("option"); 
+op.id='op'+i; 
+op.value=i;
+op.text='Rule '+i;
+el('selectRule').appendChild(op);
+}//end i loop
+}//end update select rule
+
+//update select rule drop down with saved rule
+function updateSelectRule(){
+numSavedRules=ruleFilenames.length;
+if(!el('op'+numSavedRules)){
+var op=document.createElement("option");  
+op.id='op'+numSavedRules;
+op.value=numSavedRules;
+op.text='Rule '+numSavedRules;
+el('selectRule').appendChild(op);
+}
+}//end update select rule
+
+//get rule filenames
+function getRuleFilenames(){
+el("ifr3").src="filenameReader.php";
+ruleFilenames=JSON.parse(el('ifr3').contentWindow.filenames);
+numSavedRules=ruleFilenames.length;
+//for(var i=0;i<numSavedRules;i++){console.log(ruleFilenames[i]+' ');}
+}//end get rule filenames
+
+//ruleLoader
+function ruleLoader(rn){
+loadRuleFile(rn);randomCells();if(!running){cycleCA();showCA();}
+setTimeout("updateInputs(0);",200);
+//console.log(ruleFilenames[rn]);
+//console.log(numSavedRules);
+}//end ruleLoader
+
+//update inputs
+function updateInputs(resizer){
+if(resizer){
+el('caCanvas').width=width*cellSize;
+el('caCanvas').height=height*cellSize;
+}
+el('numStates').value=numStates;
+el('bMatches').value=bMatches;
+el('dMatches').value=dMatches;
+el('birthNeighsMax').value=birthNeighsMax;
+el('deathNeighsMax').value=deathNeighsMax;
+el('densityInput').value=density;
+el('millisInput').value=millisPerFrame;
+}//end updateInputs
+
+//for keeping an input value between two ranges
+function keepRange(min,max,input){
+var output;
+if(input>max){output=input=max;}else if(input<min){output=input=min;}else{output=input;}
+return output;
+}//end keepRange
+
+//just for opening canvas as image in new tab, save image as
+function imageSaver(){
+var d=el("caCanvas").toDataURL("image/png").replace("image/png", "image/octet-stream");
+//window.location.href=d; 
+var w=window.open('about:blank','image from canvas');
+w.document.write("<a href='"+d+"' download='"+new Date().getTime()+".png'><img src='"+d+"' alt='from canvas'/></a>");
+}//end imageSaver
+
+
+//for displaying, and optionally, if rulen is > 0, saving the random values assigned to birth and death rules and new states into a json formatted text file for later loading with xmlhttprequest
+function saveRuleValues(rulen){
+var varString='{<BR>"numStates":'+numStates+',<BR>"bMatches":'+bMatches+',<BR>"dMatches":'+dMatches+',<BR>"birthNeighsMax":'+birthNeighsMax+',<BR>"deathNeighsMax":'+deathNeighsMax+',<BR>';
+
+var birthString='"birth":[<BR>';
+var deathString='"death":[<BR>';
+var newStateString='"newState":[<BR>';
+for(var i=0;i<numStates;i++){
+birthString+='[';
+deathString+='[';
+newStateString+='[';
+for(var n=0;n<numStates;n++){
+birthString+=birth[i][n]; 
+deathString+=death[i][n]
+newStateString+=newState[i][n]
+if(n<numStates-1){
+birthString+=',';
+deathString+=',';
+newStateString+=',';
+}
+}//end n loop
+if(i<numStates-1){
+birthString+='],<BR>';
+deathString+='],<BR>';
+newStateString+='],<BR>';
+}else{ //last one, no trailing comma
+birthString+=']<BR>';
+deathString+=']<BR>';
+newStateString+=']<BR>';
+}
+}//end i loop
+
+birthString+='],<BR>';
+deathString+='],<BR>';
+newStateString+=']<BR>}';
+
+var completeString=varString+birthString+deathString+newStateString;
+da('ruleValues', completeString);
+
+if(rulen>0){
+completeString=stripTags(completeString);
+el('ifr').src='ruleWriter.php?rulen='+rulen+'&json='+completeString;
+getRuleFilenames();
+}
+}//end saveRuleValues
+
+//strip out html tags
+function stripTags(html){
+var tmp = document.createElement("DIV");
+tmp.innerHTML = html;
+return tmp.textContent || tmp.innerText || "";
+}//end strip tags
+
+//json parse text file to load saved rule
+function loadRuleFile(rulen){
+getRuleFilenames();
+var xmlhttp=new XMLHttpRequest();
+var url="./ruleFiles/"+ruleFilenames[rulen];
+
+xmlhttp.onreadystatechange=function(){
+if(this.readyState == 4 && this.status == 200){
+var ruleData=JSON.parse(this.responseText);
+processRuleData(ruleData);
+}
+};
+xmlhttp.open("GET", url, true);
+xmlhttp.send();
+
+function processRuleData(ruleData){
+numStates=ruleData.numStates;
+bMatches=ruleData.bMatches;
+dMatches=ruleData.dMatches;
+birthNeighsMax=ruleData.birthNeighsMax;
+deathNeighsMax=ruleData.deathNeighsMax;
+for(var i=0;i<numStates;i++){
+for(var k=0;k<numStates;k++){
+birth[i][k]=ruleData.birth[i][k];
+death[i][k]=ruleData.death[i][k];
+newState[i][k]=ruleData.newState[i][k];
+}//end k loop
+}//end i loop
+saveRuleValues(0);
+}//end processRuleData
+}//end read rule file
+
+
+//display state colors in divs
+function divStates(){
+var activeCount=0;
+for(var i=1;i<numStates;i++){
+
+
+if(!el('ss'+i)){ //create new divs
+var d=document.createElement('div');
+d.id='ss'+i;
+d.style.backgroundColor=
+'rgb('+stateColors[i][0]+','+stateColors[i][1]+','+stateColors[i][2]+')';
+d.style.display='inline-block';
+d.style.width='20px';
+d.style.height='20px';
+d.style.border='solid black 1px';
+d.style.color='white';
+el('stateSquares').appendChild(d);
+
+}else{ //exists already, so just set color
+el('ss'+i).style.backgroundColor=
+'rgb('+stateColors[i][0]+','+stateColors[i][1]+','+stateColors[i][2]+')';
+if(activeStates[i]){activeCount++;}
+}
+}//end i loop
+da('activeCounter', activeCount+' States Active<BR>'+(numStates-activeCount)+' States Inactive');
+}//end divStates
+
+</script>
+</body>
+</html>
+
